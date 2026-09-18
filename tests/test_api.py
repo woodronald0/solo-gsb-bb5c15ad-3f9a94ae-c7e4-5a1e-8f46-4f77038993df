@@ -63,6 +63,7 @@ def test_full_commit_reveal_flow(client):
         "commitment_match": True,
         "nonce_match": True,
         "result_match": True,
+        "quotas_satisfied": True,
     }
     assert ok["replayed_result"] == result
 
@@ -78,8 +79,19 @@ def test_full_commit_reveal_flow(client):
     assert bad_seed["checks"]["commitment_match"] is False
 
     # 篡改 nonce → nonce 与结果均不符
+    # 确定性地挑一个会重放出不同结果的 nonce，避免抽签偶然撞单（4 选 2 共 12 种有序结果）
+    from app import lottery as lottery_mod
+
+    forged = next(
+        f"forged-{i}"
+        for i in range(1000)
+        if lottery_mod.draw(
+            [dict(c) for c in CANDIDATES], 2, seed, f"forged-{i}"
+        )
+        != result
+    )
     bad_nonce = client.post(
-        f"/lotteries/{lid}/verify", json={"seed": seed, "nonce": "forged"}
+        f"/lotteries/{lid}/verify", json={"seed": seed, "nonce": forged}
     ).json()
     assert bad_nonce["valid"] is False
     assert bad_nonce["checks"]["nonce_match"] is False

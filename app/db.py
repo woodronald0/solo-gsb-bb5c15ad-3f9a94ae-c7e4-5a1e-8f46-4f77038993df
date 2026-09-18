@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS lotteries (
     id          TEXT PRIMARY KEY,
     created_at  TEXT NOT NULL,
     seats       INTEGER NOT NULL,
-    candidates  TEXT NOT NULL,          -- JSON: [{"name": ..., "weight": ...}]
+    candidates  TEXT NOT NULL,          -- JSON: [{"name": ..., "weight": ..., "group": ...}]
+    quotas      TEXT,                   -- JSON: [{"group": ..., "min": ..., "max": ...}]，旧记录为 NULL
     seed        TEXT NOT NULL,          -- 揭示前仅服务端可见
     commitment  TEXT NOT NULL,
     nonce       TEXT,                   -- 执行时由调用方提供
@@ -46,6 +47,10 @@ def connect() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        # 旧库迁移：v1 表结构没有 quotas 列
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(lotteries)")}
+        if "quotas" not in columns:
+            conn.execute("ALTER TABLE lotteries ADD COLUMN quotas TEXT")
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -53,6 +58,7 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
         return None
     record = dict(row)
     record["candidates"] = json.loads(record["candidates"])
+    record["quotas"] = json.loads(record["quotas"]) if record["quotas"] else None
     record["result"] = json.loads(record["result"]) if record["result"] else None
     return record
 
@@ -62,16 +68,25 @@ def create_lottery(
     candidates: list[dict],
     seed: str,
     commitment: str,
+    quotas: list[dict] | None = None,
 ) -> dict[str, Any]:
     lottery_id = uuid.uuid4().hex
     created_at = datetime.now(timezone.utc).isoformat()
     with connect() as conn:
         conn.execute(
             """
-            INSERT INTO lotteries (id, created_at, seats, candidates, seed, commitment, status)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending')
+            INSERT INTO lotteries (id, created_at, seats, candidates, quotas, seed, commitment, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
             """,
-            (lottery_id, created_at, seats, json.dumps(candidates), seed, commitment),
+            (
+                lottery_id,
+                created_at,
+                seats,
+                json.dumps(candidates),
+                json.dumps(quotas) if quotas else None,
+                seed,
+                commitment,
+            ),
         )
     return get_lottery(lottery_id)  # type: ignore[return-value]
 
